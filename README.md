@@ -7,13 +7,20 @@ It supports authentication with **JWT**, password hashing, and CRUD operations f
 
 ## 🚀 Features
 
-- User authentication with **JWT**
-- Passwords secured using **bcrypt hashing**
-- **SQLite database** (auto-created with tables for users, events, registrations)
-- Full **CRUD operations** for events
-- Register and cancel registration for events
-- Only event creators can **update** or **delete** their events
-- Middleware to verify JWT before accessing protected routes
+- **User Management**
+  - Signup with hashed passwords (bcrypt)
+  - Login with JWT authentication
+- **Event Management**
+  - Create, read, update, and delete events
+  - Only event creators can update or delete their events
+- **Event Registration**
+  - Register for an event
+  - Cancel registration
+- **Security**
+  - JWT-based authentication middleware
+  - Protected endpoints for authorized users only
+- **Database**
+  - SQLite database auto-created with tables for users, events, and registrations
 
 ---
 
@@ -27,6 +34,6 @@ It supports authentication with **JWT**, password hashing, and CRUD operations f
 | PUT    | `/events/:id`             | Update an event                 | Yes           | Only creator can edit  |
 | DELETE | `/events/:id`             | Delete an event                 | Yes           | Only creator can delete|
 | POST   | `/signup`                 | Register a new user             | No            |                        |
-| POST   | `/login`                  | Authenticate user (JWT issued)  | No            | Returns JWT token      |
+| POST   | `/login`                  | Authenticate user (JWT)         | No            | Returns JWT token      |
 | POST   | `/events/:id/register`    | Register user for an event      | Yes           |                        |
 | DELETE | `/events/:id/register`    | Cancel event registration       | Yes           |                        |
