@@ -33,7 +33,6 @@ func VerifyToken(token string) (int64, error) {
 
 		return []byte(secretKey), nil
 	}) 
-
 	if err != nil {
 		return 0, errors.New("Could not parse token.")
 	}
@@ -59,4 +58,8 @@ func VerifyToken(token string) (int64, error) {
 
 	return userId, nil
 }
+
+
+// <base64(header)>.<base64(payload)> 用 secretKey 和演算法產生出 <base64(signature)>
+// 最後token就變成<base64(header)>.<base64(payload)>.<base64(signature)>
 

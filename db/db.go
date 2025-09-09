@@ -2,75 +2,57 @@ package db
 
 import (
 	"database/sql"
+	"log"
 
-	_ "modernc.org/sqlite"
+	// 1) 改用 Postgres driver
+	_ "github.com/lib/pq"
 )
 
 var DB *sql.DB
- 
+
 func InitDB() {
-    var err error
-    DB, err = sql.Open("sqlite", "api.db") //建立與DB的連線 //負責跟資料庫（這裡是 SQLite）溝通 //if api.db 沒有會自動幫你生一個
- 
-    if err != nil {
-        panic("Could not connect to database.")
-    }
- 
-    DB.SetMaxOpenConns(10)
-    DB.SetMaxIdleConns(5)
- 
-    createTables()
+	var err error
+	// 2) 換成 Postgres 連線字串（依你的環境調整）
+	dsn := "postgres://user:pass@localhost:5432/app?sslmode=disable"
+	DB, err = sql.Open("postgres", dsn)
+	if err != nil {
+		log.Fatal("Could not connect to database:", err)
+	}
+
+	if err := DB.Ping(); err != nil {
+		log.Fatal("Could not ping database:", err)
+	}
+
+	// Postgres 通常不需要像 SQLite 設 MaxOpen/Idle 這麼小，但留著也可
+	DB.SetMaxOpenConns(10)
+	DB.SetMaxIdleConns(5)
+
+	createTables()
 }
 
 func createTables() {
+	// 3) 建 users（維持你原本 UNIQUE email 的需求）
 	createUsersTable := `
 	CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    email TEXT NOT NULL UNIQUE,
-    password TEXT NOT NULL
-	)
-	`
-	_, err := DB.Exec(createUsersTable)
-	if err != nil {
-		panic("Could not create users table")
+		id BIGSERIAL PRIMARY KEY,
+		email TEXT NOT NULL UNIQUE,
+		password TEXT NOT NULL
+	);`
+	if _, err := DB.Exec(createUsersTable); err != nil {
+		log.Fatal("Could not create users table:", err)
 	}
 
+	// 4) 刪掉原本的 createEventsTable（因為 events 會改由 Mongo 管）
 
-	createEventsTable := `
-	CREATE TABLE IF NOT EXISTS events (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		name TEXT NOT NULL,
-		description TEXT NOT NULL,
-		location TEXT NOT NULL,
-		dateTime DATETIME NOT NULL,
-		user_id INTEGER,
-		FOREIGN KEY(user_id) REFERENCES users(id)
-	)
-	`
-    _, err = DB.Exec(createEventsTable) //執行SQL
-    if err != nil {
-        panic("Could not create events table.")
-    }
-
-
+	// 5) 建 registrations，event_id 用 UUID，並加入複合唯一鍵避免重複報名
 	createRegistrationsTable := `
 	CREATE TABLE IF NOT EXISTS registrations (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		event_id INTEGER,
-		user_id INTEGER,
-		FOREIGN KEY(event_id) REFERENCES events(id),
-		FOREIGN KEY(user_id) REFERENCES users(id)
-	)`
-
-	_, err = DB.Exec(createRegistrationsTable)
-    if err != nil {
-        panic("Could not create registrationsTable table.")
-    }
-
-
+		id BIGSERIAL PRIMARY KEY,
+		user_id BIGINT NOT NULL REFERENCES users(id),
+		event_id UUID NOT NULL,
+		UNIQUE (user_id, event_id)
+	);`
+	if _, err := DB.Exec(createRegistrationsTable); err != nil {
+		log.Fatal("Could not create registrations table:", err)
+	}
 }
-
-
-// SQLite3 的特色
-// SQLite 是嵌入式資料庫（embedded DB），不需要啟動額外的資料庫伺服器。
-// 資料儲存在一個 .db 檔案中，搬檔案就等於搬資料庫
