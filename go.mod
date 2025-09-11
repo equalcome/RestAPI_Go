@@ -1,6 +1,8 @@
 module restapi
 
-go 1.23.1
+go 1.24.0
+
+toolchain go1.24.7
 
 require (
 	github.com/gin-gonic/gin v1.10.1
@@ -9,6 +11,7 @@ require (
 	github.com/lib/pq v1.10.9
 	go.mongodb.org/mongo-driver v1.17.4
 	golang.org/x/crypto v0.41.0
+	golang.org/x/time v0.13.0
 )
 
 require (

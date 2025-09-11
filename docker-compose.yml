@@ -1,5 +1,4 @@
 version: "3.9"
-
 services:
   postgres:
     image: postgres:16
@@ -18,5 +17,8 @@ services:
     image: mongo:7
     container_name: mongo
     ports:
-      - "27017:27017"
+      - "27018:27017" # Host:Container
     restart: unless-stopped
+
+volumes:
+  mongo_data:
