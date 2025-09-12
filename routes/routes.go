@@ -2,16 +2,18 @@
 package routes
 
 import (
+	"fmt" // 🔥 for quota key
 	"net/http"
 	"strconv"
 	"time"
 
-	"github.com/gin-gonic/gin" //interface 是「規範一組方法」的清單。
+	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9" // 🔥 用於 Quota
 
 	"restapi/middlewares"
 	"restapi/models"
-	"restapi/utils"
+	"restapi/utils" // 🔥 用於 CacheInvalidator
 )
 
 // 依賴注入容器
@@ -19,20 +21,26 @@ type deps struct {
 	users  models.UserRepository
 	regs   models.RegistrationRepository
 	events models.EventRepository
+	inv    *utils.CacheInvalidator // 🔥 新增：快取失效器
 }
 
-// 由 main 傳入各 Repository，避免在 routes 內部直接依賴特定 DB
-func RegisterRoutes(server *gin.Engine, u models.UserRepository, r models.RegistrationRepository, e models.EventRepository) {
-	d := &deps{users: u, regs: r, events: e}
+// 由 main 傳入各 Repository + Redis + Invalidator
+func RegisterRoutes(
+	server *gin.Engine,
+	u models.UserRepository,
+	r models.RegistrationRepository,
+	e models.EventRepository,
+	rdb *redis.Client,              // 🔥 新增：給 Quota 用
+	inv *utils.CacheInvalidator,    // 🔥 新增：事件後清快取
+) {
+	d := &deps{users: u, regs: r, events: e, inv: inv}
 
-	// ===== ① 全域 IP 限速（20 rps / 40 burst）=====  每 1 秒 20 次
+	// ===== ① 全域 IP 限速（20 rps / 40 burst）=====
 	globalLimiter := middlewares.NewRateLimiter(middlewares.LimiterConfig{
 		RPS:     20,
 		Burst:   40,
 		IdleTTL: 3 * time.Minute,
 	})
-	
-	//把這個 middleware 掛在整個 server 上，所有請求進來都會先經過它。
 	server.Use(globalLimiter.Middleware(func(c *gin.Context) string {
 		return "ip:" + c.ClientIP()
 	}))
@@ -52,10 +60,11 @@ func RegisterRoutes(server *gin.Engine, u models.UserRepository, r models.Regist
 		d.login,
 	)
 
-	// ===== ③ 受保護群組：先驗證，再以 userId 限速 =====
+	// ===== ③ 受保護群組：先驗證，再以 userId 限速 + 每日配額 =====
 	auth := server.Group("/")
-	auth.Use(middlewares.Authenticate) // 會把 userId 放入 context:contentReference[oaicite:2]{index=2}
+	auth.Use(middlewares.Authenticate) // 會把 userId 放入 context
 
+	// 使用者層級限速（瞬時尖峰）
 	userLimiter := middlewares.NewRateLimiter(middlewares.LimiterConfig{
 		RPS:     5, // 每 1 秒 5 次
 		Burst:   10,
@@ -65,11 +74,23 @@ func RegisterRoutes(server *gin.Engine, u models.UserRepository, r models.Regist
 		return "u:" + strconv.FormatInt(c.GetInt64("userId"), 10)
 	}))
 
-	// 公開 endpoints ///events (未登入) //只有全域 IP
+	// 🔥 每日配額（長期用量控管）：預設每位使用者每天 2000 次（可依需求調整）
+	auth.Use(middlewares.Quota(rdb, middlewares.QuotaRule{
+		Limit:  20, //2000
+		Window: 24 * time.Hour,
+		KeyFn: func(c *gin.Context) string {
+			uid := c.GetInt64("userId")
+			if uid == 0 { return "" }
+			// 若想細分每個端點，改成 fmt.Sprintf("quota:user:%d:day:%s", uid, c.FullPath())
+			return fmt.Sprintf("quota:user:%d:day", uid)
+		},
+	}))
+
+	// 公開 endpoints（未登入）→ 只有全域 IP 限速與回應快取
 	server.GET("/events", d.getEvents)
 	server.GET("/events/:id", d.getEvent)
 
-	// 需驗證的 endpoints（自帶 user 限速）///events (登入後) //全域 IP + 使用者限速
+	// 登入後 endpoints → 全域 IP + 使用者限速 + 每日配額
 	auth.POST("/events", d.createEvent)
 	auth.PUT("/events/:id", d.updateEvent)
 	auth.DELETE("/events/:id", d.deleteEvent)
@@ -108,7 +129,7 @@ func (d *deps) createEvent(c *gin.Context) {
 		return
 	}
 
-	event.UserID = c.GetInt64("userId") // 由 middleware 注入:contentReference[oaicite:3]{index=3}
+	event.UserID = c.GetInt64("userId") // 由 middleware 注入
 	if event.ID == "" {
 		event.ID = uuid.NewString() // 與 SQL 的 registrations(event_id UUID) 對齊
 	}
@@ -117,6 +138,13 @@ func (d *deps) createEvent(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "Could not create event. Try again later."})
 		return
 	}
+
+	// 🔥 事件後：清除列表與單筆快取
+	if d.inv != nil {
+		d.inv.PurgeEventsList(c)
+		d.inv.PurgeEventItem(c, event.ID)
+	}
+
 	c.JSON(http.StatusCreated, gin.H{"message": "event created!", "event": event})
 }
 
@@ -147,6 +175,13 @@ func (d *deps) updateEvent(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "Could not update event. Try again later."})
 		return
 	}
+
+	// 🔥 事件後：清快取
+	if d.inv != nil {
+		d.inv.PurgeEventsList(c)
+		d.inv.PurgeEventItem(c, incoming.ID)
+	}
+
 	c.JSON(http.StatusOK, gin.H{"message": "Event updated successfully!"})
 }
 
@@ -169,6 +204,13 @@ func (d *deps) deleteEvent(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "Could not delete the event."})
 		return
 	}
+
+	// 🔥 事件後：清快取
+	if d.inv != nil {
+		d.inv.PurgeEventsList(c)
+		d.inv.PurgeEventItem(c, id)
+	}
+
 	c.JSON(http.StatusOK, gin.H{"message": "Event deleted successfully!"})
 }
 
@@ -188,6 +230,12 @@ func (d *deps) registerForEvent(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"message": "Already registered or failed."})
 		return
 	}
+
+	// （視需求決定是否清列表快取，避免報名數顯示延遲）
+	if d.inv != nil {
+		d.inv.PurgeEventsList(c)
+	}
+
 	c.JSON(http.StatusCreated, gin.H{"message": "Registered!"})
 }
 
@@ -200,6 +248,12 @@ func (d *deps) cancelRegistration(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "Could not cancel registration."})
 		return
 	}
+
+	// （視需求決定是否清列表快取）
+	if d.inv != nil {
+		d.inv.PurgeEventsList(c)
+	}
+
 	c.JSON(http.StatusOK, gin.H{"message": "Cancelled!"})
 }
 
@@ -231,8 +285,8 @@ func (d *deps) login(c *gin.Context) {
 		Password string `json:"password" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-	 c.JSON(http.StatusBadRequest, gin.H{"message": "Could not parse request data."})
-	 return
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Could not parse request data."})
+		return
 	}
 
 	user, err := d.users.ValidateCredentials(req.Email, req.Password)
