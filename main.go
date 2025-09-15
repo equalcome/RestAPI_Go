@@ -42,9 +42,9 @@ func main() {
 	eventsCol := mg.Database("app").Collection("events")
 
 	// 3) repositories
-	userRepo  := models.NewSQLUserRepository(sqldb)
-	regRepo   := models.NewSQLRegistrationRepository(sqldb)
-	eventRepo := models.NewMongoEventRepository(eventsCol)
+	userRepo  := models.NewSQLUserRepository(sqldb) //介面 物件有實作丟進去
+	regRepo   := models.NewSQLRegistrationRepository(sqldb) //介面 物件有實作丟進去
+	eventRepo := models.NewMongoEventRepository(eventsCol) //介面 物件有實作丟進去
 
 	// 4) Redis（快取 + 配額）
 	rdb := redis.NewClient(&redis.Options{

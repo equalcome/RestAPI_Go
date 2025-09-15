@@ -9,6 +9,8 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
+//這些 mock 正好滿足專案的三個介面 UserRepository / EventRepository / RegistrationRepository
+
 type mongoEventRepo struct {
     col *mongo.Collection
 }

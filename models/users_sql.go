@@ -6,7 +6,7 @@ import (
 	"restapi/utils" // 這裡假設你在 utils 裡有 HashPassword / CheckPasswordHash
 )
 
-type sqlUserRepo struct{ db *sql.DB }
+type sqlUserRepo struct{ db *sql.DB } //真db 下面做他的與db的操作 //實現介面方法
 
 func NewSQLUserRepository(db *sql.DB) UserRepository { return &sqlUserRepo{db} }
 

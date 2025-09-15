@@ -176,7 +176,7 @@ func (d *deps) updateEvent(c *gin.Context) {
 		return
 	}
 
-	// 🔥 事件後：清快取
+	// 事件後：清快取
 	if d.inv != nil {
 		d.inv.PurgeEventsList(c)
 		d.inv.PurgeEventItem(c, incoming.ID)
@@ -205,7 +205,7 @@ func (d *deps) deleteEvent(c *gin.Context) {
 		return
 	}
 
-	// 🔥 事件後：清快取
+	// 事件後：清快取
 	if d.inv != nil {
 		d.inv.PurgeEventsList(c)
 		d.inv.PurgeEventItem(c, id)
