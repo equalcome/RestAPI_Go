@@ -1,0 +1,171 @@
+name: CI-CD
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: read
+  packages: write # 允許推 GHCR
+  id-token: write
+
+env:
+  GO_VERSION: "1.24"
+  IMAGE_NAME: ghcr.io/${{ github.repository }} # ghcr.io/<owner>/<repo>
+
+jobs:
+  # ---------- 單元測試 ----------
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-${{ env.GO_VERSION }}-
+
+      - name: Unit tests (no integration)
+        run: |
+          go test ./... -covermode=atomic -coverprofile=coverage.out
+          go tool cover -func=coverage.out | tail -n 10
+
+      - name: Upload unit coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-unit
+          path: coverage.out
+
+  # ---------- 整合測試（帶 DB 服務） ----------
+  integration-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: appuser
+          POSTGRES_PASSWORD: apppass
+          POSTGRES_DB: app
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U appuser -d app"
+          --health-interval=5s --health-timeout=3s --health-retries=20
+      mongo:
+        image: mongo:7
+        ports:
+          - 27018:27017 # 測試程式若連 127.0.0.1:27018 也能通
+        options: >-
+          --health-cmd="mongosh --quiet --eval 'db.runCommand({ ping: 1 })'"
+          --health-interval=5s --health-timeout=3s --health-retries=20
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s --health-timeout=3s --health-retries=20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clients (psql)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Wait for Postgres & apply schema
+        env:
+          PGPASSWORD: apppass
+        run: |
+          for i in {1..30}; do
+            pg_isready -h localhost -p 5432 -U appuser -d app && break
+            sleep 2
+          done
+          psql "postgresql://appuser@localhost:5432/app" -f init.sql
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-${{ env.GO_VERSION }}-
+
+      - name: Integration tests
+        env:
+          # 若測試程式會讀環境變數，可提供以下值
+          PG_DSN: "postgres://appuser:apppass@localhost:5432/app?sslmode=disable"
+          MONGO_URI: "mongodb://localhost:27018"
+          REDIS_ADDR: "localhost:6379"
+        run: |
+          go test -v -tags=integration ./tests \
+            -coverpkg=./... \
+            -coverprofile=coverage.it.out \
+            -covermode=atomic
+
+      - name: Upload integration coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-integration
+          path: coverage.it.out
+
+  # ---------- Build & Push GHCR ----------
+  build-and-push:
+    needs: [unit-tests, integration-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract version/tag
+        id: meta
+        run: |
+          # 以短 SHA 和 'latest' 雙 tag
+          echo "TAG_SHA=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+
+      - name: Build & Push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.TAG_SHA }}
+
+      - name: Summary
+        run: |
+          echo "Pushed:"
+          echo "  ${{ env.IMAGE_NAME }}:latest"
+          echo "  ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.TAG_SHA }}"

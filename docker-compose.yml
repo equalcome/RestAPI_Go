@@ -3,30 +3,61 @@ services:
   postgres:
     image: postgres:16
     container_name: pg
-    ports:
-      - "5432:5432"
+    ports: ["5432:5432"]
     environment:
       POSTGRES_USER: appuser
       POSTGRES_PASSWORD: apppass
       POSTGRES_DB: app
     volumes:
-      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U appuser -d app"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     restart: unless-stopped
 
   mongo:
     image: mongo:7
     container_name: mongo
-    ports:
-      - "27018:27017" # Host:Container
+    ports: ["27018:27017"] # Host:Container
+    healthcheck:
+      test:
+        ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ ping: 1 })"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     restart: unless-stopped
 
   redis:
     image: redis:7
     container_name: redis
-    ports:
-      - "6379:6379"
+    ports: ["6379:6379"]
     command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "PING"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     restart: unless-stopped
 
-volumes:
-  mongo_data:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: restapi
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # 這三個會覆蓋 main.go 的預設值（容器內用服務名連線）
+      PG_DSN: "postgres://appuser:apppass@postgres:5432/app?sslmode=disable"
+      MONGO_URI: "mongodb://mongo:27017"
+      REDIS_ADDR: "redis:6379"
+    ports:
+      - "8081:8080"
+    restart: unless-stopped
