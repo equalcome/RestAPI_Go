@@ -12,7 +12,7 @@ permissions:
 
 env:
   GO_VERSION: "1.24"
-  IMAGE_NAME: ghcr.io/${{ toLower(github.repository) }}
+  IMAGE_NAME: ghcr.io/equalcome/restapi-go
 
 jobs:
   # ---------- 單元測試 ----------
