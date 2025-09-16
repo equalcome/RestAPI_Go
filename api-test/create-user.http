@@ -1,7 +1,7 @@
 POST http://127.0.0.1:8081/signup
-content-type: application/json
+content-type: application/json                                                  
 
 {
-    "email": "2test@example.com",
-    "password": "2test"
+    "email": "4test@example.com",
+    "password": "4test"
 }

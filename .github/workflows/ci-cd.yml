@@ -144,3 +144,38 @@ jobs:
           tags: |
             ${{ env.IMAGE_NAME }}:latest
             ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.TAG_SHA }}
+
+  # ---------- Deploy to VM via SSH ----------
+  deploy-to-vm:
+    needs: [build-and-push]
+    if: github.event_name == 'push' # 避免 PR 也部署
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH to VM and deploy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USER }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -e
+            cd ~/restapi-deploy
+
+            # 若 GHCR 是 private，先登入（public 可略）
+            if [ -n "${{ secrets.GHCR_PAT }}" ]; then
+              echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            fi
+
+            # 取這次 commit 的短 SHA 當部署版本
+            TAG="${{ github.sha }}"
+            TAG_SHORT="$(echo "$TAG" | cut -c1-7)"
+
+            # 必須有 deploy.sh（你已放好）
+            if [ ! -x ./deploy.sh ]; then
+              echo "deploy.sh 不存在或不可執行，請先在 VM 的 ~/restapi-deploy 放好 deploy.sh 並 chmod +x"
+              exit 1
+            fi
+
+            ./deploy.sh "$TAG_SHORT"
+            docker compose ps
